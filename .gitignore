@@ -1,0 +1,62 @@
+# --- Python environment / cache ---
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# --- Secrets / local config ---
+.env
+
+# --- One-off debug / exploration scripts (project root) ---
+# Explicitly named rather than globbed so this list stays reviewable.
+debug_inspect.py
+debug_seed0.py
+inspect_boundary.py
+inspect_mapping.py
+quick_measure.py
+tmp_check_crisis.py
+tmp_check_crisis_fast.py
+tmp_debug_selection_jump.py
+tmp_debug_walk_forward.py
+tmp_diagnostic.py
+tmp_guard_sanity.py
+tmp_guard_sanity_check.py
+tmp_measure_jumps.py
+tmp_measure_jumps_save.py
+tmp_state_match_cost.py
+
+# Additional one-off scripts found in the root that follow the same
+# exploratory pattern (seed/guard/candidate diagnostics) but don't match
+# the tmp_/debug_/inspect_/quick_ prefixes above — flagged for your review,
+# see chat summary.
+check_guarded_boundaries.py
+compute_candidates_seed5.py
+compute_candidates_seed5_direct.py
+diagnose_seed.py
+examine_seed0_variants.py
+guard_validation_clean.py
+guard_validation_result.py
+guard_validation_short.py
+measure_10_seeds_postguard.py
+measure_seeds_quick.py
+measure_soft_mapping.py
+
+# Output files (.txt/.json) produced by the scripts above
+tmp_diagnose_seed_5.json
+tmp_guard_sanity_err.txt
+tmp_jumps_results.txt
+tmp_jumps_soft_mapping.json
+tmp_measure_stdout.txt
+guard_check_output.txt
+guard_check_output2.txt
+guard_validation_result.json
+temp_guard_result.json
+
+# --- Large data files / model artifacts ---
+# None currently in the repo, but excluded preventively:
+*.pkl
+*.joblib
+*.db
+*.sqlite
+*.sqlite3
+data/*.csv
