@@ -101,6 +101,57 @@ def test_variance_floor_lifts_near_degenerate_asset_variance():
         assert cash_var <= expected_floor * 1.5  # rescale should land close to the target, not far past it
 
 
+def test_growth_asset_floor_is_regime_responsive_not_pinned():
+    """Regression test for a real bug: MIN_WEIGHT used to be a single fixed
+    value (0.05) applied to every asset regardless of regime, which
+    silently pinned stocks/gold at that floor in BOTH calm and crisis
+    allocations -- discovered via a synthetic stress test that measured
+    weight_stocks at exactly 0.05 (to machine precision) on both a calm day
+    and a crash day, meaning the whole regime-conditional mechanism never
+    showed up in the final weights at all despite working correctly
+    underneath (crisis-covariance blending, defensive-cap widening).
+    Fixed by making the growth-asset floor itself interpolate by
+    crisis_probability, symmetric to the existing defensive cap.
+
+    Two checks, not one: the class constants must actually differ (the
+    cheap canary that would catch someone collapsing them back to one
+    value), AND that difference must actually be wired into allocate()'s
+    real output, not just defined-and-unused.
+    """
+    assert (
+        RegimeConditionalHRP.CALM_GROWTH_MIN_WEIGHT - RegimeConditionalHRP.CRISIS_GROWTH_MIN_WEIGHT > 0.02
+    ), "CALM_GROWTH_MIN_WEIGHT and CRISIS_GROWTH_MIN_WEIGHT must differ meaningfully, not collapse to one constant"
+
+    rng = np.random.default_rng(4)
+    n = 300
+    dates = pd.date_range("2020-01-01", periods=n, freq="B")
+    returns = pd.DataFrame(
+        {
+            "stocks": rng.normal(scale=0.02, size=n),
+            "bonds": rng.normal(scale=0.005, size=n),
+            "cash": rng.normal(scale=0.0005, size=n),
+            "gold": rng.normal(scale=0.015, size=n),
+        },
+        index=dates,
+    )
+    crisis_probability = pd.Series(rng.uniform(0, 1, size=n), index=dates)
+
+    model = RegimeConditionalHRP().fit(returns, crisis_probability)
+
+    calm_alloc = model.allocate(0.0)
+    crisis_alloc = model.allocate(1.0)
+
+    for asset in ("stocks", "gold"):
+        # Not just "different" -- different by a meaningful margin, so a
+        # regression back to a single hardcoded floor (which would produce
+        # an exact or near-exact match between the two calls, as it did
+        # before this fix) actually fails this assertion.
+        assert calm_alloc.weights[asset] - crisis_alloc.weights[asset] > 0.02, (
+            f"{asset}: calm={calm_alloc.weights[asset]}, crisis={crisis_alloc.weights[asset]} "
+            "-- growth-asset weight should drop measurably as crisis_probability rises"
+        )
+
+
 def test_allocate_defensive_cap_widens_with_crisis_probability():
     """Regression test for allocate()'s per-asset defensive-cap widening,
     tested directly (not via the aggregate bonds+cash total, which can pin

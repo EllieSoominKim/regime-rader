@@ -195,7 +195,32 @@ class RegimeConditionalHRP:
     CALM_DEFENSIVE_MAX_WEIGHT = 0.5
     CRISIS_DEFENSIVE_MAX_WEIGHT = 0.85
     GROWTH_MAX_WEIGHT = 0.6
-    MIN_WEIGHT = 0.05
+    DEFENSIVE_MIN_WEIGHT = 0.05
+
+    # [2026-08 fix] Growth-asset MIN_WEIGHT used to be a single fixed 0.05
+    # for every asset, every regime. That silently defeated the whole
+    # regime-conditional design: raw (unbounded) inverse-variance HRP
+    # weights for stocks/gold in this asset universe are ~0.1-0.3% in BOTH
+    # calm and crisis (see the walk-forward finding + the synthetic
+    # stress-test check that measured weight_stocks at exactly 0.05 to
+    # machine precision on both a calm day and a crash day) -- the fixed
+    # 0.05 floor was always the binding constraint, so the crisis-covariance
+    # blending and the defensive-cap widening never got a chance to show up
+    # in the final weights at all. The demonstrated "crash protection" in
+    # that stress test was really just a permanently-defensive static tilt,
+    # directly contradicting the design's core differentiator ("정적
+    # 글라이드패스가 아닌 국면 인식 기반 동적 조정").
+    #
+    # Fixed the same way the defensive cap already works: interpolate the
+    # growth floor continuously by crisis_probability instead of holding it
+    # fixed. CRISIS_GROWTH_MIN_WEIGHT=0.0 at p=1 is deliberate, not an
+    # oversight -- observed raw growth-asset weights (~0.1-0.3%) are already
+    # below any small positive floor we could pick (even 0.01 would still
+    # bind), so the floor has to actually reach 0 for the covariance-driven
+    # mechanism and the defensive cap to be the binding constraints instead
+    # of this one, which was the whole point of the fix.
+    CALM_GROWTH_MIN_WEIGHT = 0.05
+    CRISIS_GROWTH_MIN_WEIGHT = 0.0
 
     def __init__(self) -> None:
         self.asset_names_: Optional[List[str]] = None
@@ -271,9 +296,16 @@ class RegimeConditionalHRP:
             )
             for asset in self.asset_names_
         }
-        bounded = apply_allocation_bounds(
-            raw_weights.round(4).to_dict(), min_weight=self.MIN_WEIGHT, max_weight=max_weight
-        )
+        min_weight = {
+            asset: (
+                self.DEFENSIVE_MIN_WEIGHT
+                if asset in self.DEFENSIVE_ASSETS
+                else self.CALM_GROWTH_MIN_WEIGHT
+                + p * (self.CRISIS_GROWTH_MIN_WEIGHT - self.CALM_GROWTH_MIN_WEIGHT)
+            )
+            for asset in self.asset_names_
+        }
+        bounded = apply_allocation_bounds(raw_weights.round(4).to_dict(), min_weight=min_weight, max_weight=max_weight)
 
         return RegimeConditionalAllocation(
             weights=bounded,
@@ -360,18 +392,22 @@ class WalkForwardHRPEngine:
             row["variance_floor_applied_calm"] = ",".join(allocation.variance_floor_applied_calm)
             row["variance_floor_applied_crisis"] = ",".join(allocation.variance_floor_applied_crisis)
 
-            # Combined bonds+cash weight is expected to sit near a fixed
-            # ceiling (driven by the growth-asset MIN_WEIGHT floor, not by
-            # the regime -- see RegimeConditionalHRP's finding writeup) in
-            # both calm and crisis periods, which on its own reads as "the
-            # crisis mechanism did nothing." The actual regime-responsive
-            # signal, once combined defensive is pinned, is the WITHIN-
-            # defensive mix: how much of that fixed total sits in cash
-            # (whose own max_weight cap widens fastest with
-            # crisis_probability) vs. bonds (which gets squeezed to make
-            # room). Exposed here explicitly so it's visible on its own
-            # terms rather than requiring someone to notice bonds+cash is
-            # flat and wrongly conclude the mechanism failed.
+            # [2026-08] Before the growth-asset floor became
+            # regime-responsive (see CALM_GROWTH_MIN_WEIGHT /
+            # CRISIS_GROWTH_MIN_WEIGHT), combined bonds+cash weight used to
+            # sit pinned at a fixed ~90% ceiling in BOTH calm and crisis
+            # periods (driven entirely by the old fixed MIN_WEIGHT=0.05
+            # floor on stocks/gold), which on its own read as "the crisis
+            # mechanism did nothing" even though the crisis-covariance
+            # blending and defensive-cap widening were working correctly
+            # underneath -- the only visible regime-responsive signal was
+            # the WITHIN-defensive mix (cash vs. bonds). Now that the
+            # growth floor itself responds to crisis_probability, combined
+            # defensive weight also moves visibly with the regime (see the
+            # real-data walk-forward finding: ~0.90 calm -> ~0.996 crisis).
+            # `defensive_mix_shift` is kept regardless -- it's still a
+            # real, distinct signal (how the defensive sleeve is composed),
+            # not just a workaround for the old pinning bug.
             defensive_weight = sum(allocation.weights.get(a, 0.0) for a in RegimeConditionalHRP.DEFENSIVE_ASSETS)
             row["combined_defensive_weight"] = defensive_weight
             row["defensive_mix_shift"] = (

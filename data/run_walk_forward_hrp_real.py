@@ -110,8 +110,8 @@ def main() -> None:
     high_defensive = high["combined_defensive_weight"]
     print(f"\ncombined defensive (bonds+cash) weight: {low_defensive:.4f} (low-crisis month) -> {high_defensive:.4f} (high-crisis month)")
     print(f"defensive_mix_shift (cash / (bonds+cash)): {low['defensive_mix_shift']:.4f} (low-crisis month) -> {high['defensive_mix_shift']:.4f} (high-crisis month)")
-    print(f"stocks weight: {low['weight_stocks']:.4f} -> {high['weight_stocks']:.4f}  (expected: pinned near MIN_WEIGHT=0.05 in both)")
-    print(f"gold weight:   {low['weight_gold']:.4f} -> {high['weight_gold']:.4f}  (expected: pinned near MIN_WEIGHT=0.05 in both)")
+    print(f"stocks weight: {low['weight_stocks']:.4f} -> {high['weight_stocks']:.4f}  (regime-responsive floor: expected to drop toward CRISIS_GROWTH_MIN_WEIGHT as p rises)")
+    print(f"gold weight:   {low['weight_gold']:.4f} -> {high['weight_gold']:.4f}  (regime-responsive floor: expected to drop toward CRISIS_GROWTH_MIN_WEIGHT as p rises)")
 
     summary = {
         "elapsed_seconds": round(elapsed, 2),
