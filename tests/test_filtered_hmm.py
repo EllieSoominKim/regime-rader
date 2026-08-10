@@ -63,6 +63,34 @@ def test_sanity_recover_two_regimes():
     assert accuracy > 0.8
 
 
+def test_fit_is_deterministic_across_runs_with_multiple_restarts():
+    """Regression test for a restart-seeding bug: `fit` used to reset
+    `self.model.random_state = None` for every restart after the first when
+    `n_init > 1`, so restarts 1..n_init-1 drew entropy from OS randomness
+    instead of `self.random_state`. The same (random_state, n_init) could
+    then silently select a different "best of n_init" local optimum on every
+    call — non-determinism that only showed up with n_init > 1 (n_init=1 was
+    always reproducible, since it never took the buggy branch).
+
+    Fitting the same data with the same random_state and n_init > 1 twice
+    must therefore yield bit-for-bit identical log-likelihood and fitted
+    parameters (means, covariances) every time, not just on average.
+    """
+    obs, _ = generate_synthetic_two_state_data(n_samples=300, seed=3)
+
+    obs_2d = obs.reshape(-1, 1)
+    model_a = GaussianHMMFiltered(n_states=2, random_state=3, n_iter=100, n_init=10)
+    model_a.fit(obs)
+    model_b = GaussianHMMFiltered(n_states=2, random_state=3, n_iter=100, n_init=10)
+    model_b.fit(obs)
+
+    assert model_a.model.score(obs_2d) == model_b.model.score(obs_2d)
+    assert np.array_equal(model_a.model.means_, model_b.model.means_)
+    assert np.array_equal(np.asarray(model_a.model.covars_), np.asarray(model_b.model.covars_))
+    assert np.array_equal(model_a.model.transmat_, model_b.model.transmat_)
+    assert np.array_equal(model_a.model.startprob_, model_b.model.startprob_)
+
+
 def test_aic_bic_prefers_true_state_count():
     obs, _ = generate_separable_two_state_data(n_samples=800, seed=2)
     model2 = GaussianHMMFiltered(n_states=2, random_state=2, n_iter=200, n_init=10)

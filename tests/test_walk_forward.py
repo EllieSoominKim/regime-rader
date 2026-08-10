@@ -108,20 +108,30 @@ def test_walk_forward_selection_changes_state_count_mid_run():
     if len(discontinuity_dates) > 0:
         boundary_date = discontinuity_dates[0]
         previous_date = results.index[results.index.get_loc(boundary_date) - 1]
-        jump = abs(results.loc[boundary_date, "crisis_probability"] - results.loc[previous_date, "crisis_probability"])
-        # Allow a larger but still-bounded jump to avoid flaky failures from
-        # stochastic refits and data randomness. `crisis_probability` is a
-        # variance-ordered derived scalar: when the model selection switches
-        # between different `n_states` the mapping between latent indices
-        # and real-world regimes can legitimately change (different fits may
-        # merge/split regimes). We therefore bound but do not require near-
-        # continuity. Threshold `0.7` was chosen empirically (see test
-        # measurement script) — it flags only very large, likely-buggy
-        # discontinuities while tolerating expected stochastic variability.
-        assert jump < 0.7, (
-            "Crisis probability jump at a model-selection refit boundary should be bounded; "
-            "a very large jump usually indicates label-switching or unstable state mapping."
-        )
+
+        # We used to assert `jump < 0.7` here, on the theory that a very
+        # large crisis_probability jump at a model-selection boundary must
+        # indicate label-switching or an unstable state mapping. The
+        # seed-3/seed-5 responsibility diagnostic (see
+        # responsibility_diagnostic_seeds_3_5.py and the note in
+        # WalkForwardRegimeEngine's docstring) disproved that: it measured
+        # the actual new-state -> prior-state mapping at these boundaries
+        # and found it near-one-hot (confident, not diffuse/label-switched)
+        # even for a seed whose jump was ~1.0 -- the jump was the correct
+        # consequence of a genuine new regime splitting off a prior one, not
+        # a mapping bug. There is no principled threshold on jump size, so
+        # we no longer assert one. What a bug *would* actually look like is
+        # the filtered probabilities themselves being malformed, so we check
+        # that instead: on both sides of the boundary, the state
+        # probabilities are non-NaN and sum to 1.
+        for date in (previous_date, boundary_date):
+            n_states_at_date = int(results.loc[date, "selected_n_states"])
+            state_cols = [f"state_{i}" for i in range(n_states_at_date)]
+            state_probs = results.loc[date, state_cols].astype(float)
+            assert not state_probs.isna().any(), f"NaN filtered probability at {date}"
+            assert np.isclose(state_probs.sum(), 1.0, atol=1e-9), (
+                f"Filtered probabilities at {date} must sum to 1, got {state_probs.sum()}"
+            )
 
 
 def test_walk_forward_model_selection_uses_truncated_history(monkeypatch):

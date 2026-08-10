@@ -35,6 +35,25 @@ class WalkForwardRegimeEngine:
         Minimum number of observations required before the first fit.
     n_init:
         Number of random restarts for HMM fitting.
+
+    Note on crisis_probability discontinuities at model-selection boundaries
+    --------------------------------------------------------------------
+    When `candidate_state_counts` is set, `selection_criterion` can pick a
+    different `n_states` at consecutive refits. `crisis_probability` is
+    defined relative to the current model's own (variance-ordered) states,
+    so it can legitimately jump sharply -- up to the full 0-to-1 range -- at
+    the refit where the selected state count changes. The
+    seed-3/seed-5 responsibility diagnostic (see
+    `responsibility_diagnostic_seeds_3_5.py`) confirmed this is expected,
+    correct behavior rather than a mapping/label-switching bug: the
+    new-state -> prior-state responsibility mapping (`match_states_across_refits`)
+    was near-one-hot at these boundaries even when the jump was ~1.0 -- i.e.
+    a genuine new regime split off a prior one, and the metric correctly
+    reflects that. This engine does not, and should not, smooth or cap that
+    jump itself; if a smoother allocation signal is needed, that belongs
+    downstream of this engine's output (e.g. in HRP's covariance blending,
+    or an explicit allocation-change cap in the portfolio layer) so the raw
+    regime read stays uncontaminated.
     """
 
     def __init__(

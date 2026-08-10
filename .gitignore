@@ -40,6 +40,7 @@ guard_validation_short.py
 measure_10_seeds_postguard.py
 measure_seeds_quick.py
 measure_soft_mapping.py
+responsibility_diagnostic_seeds_3_5.py
 
 # Output files (.txt/.json) produced by the scripts above
 tmp_diagnose_seed_5.json

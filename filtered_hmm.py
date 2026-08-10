@@ -59,11 +59,10 @@ class GaussianHMMFiltered:
         best_score = -np.inf
         best_model = None
 
+        restart_seeds = self._restart_seeds()
+
         for init_index in range(self.n_init):
-            if init_index == 0:
-                self.model.random_state = self.random_state
-            else:
-                self.model.random_state = None
+            self.model.random_state = restart_seeds[init_index]
 
             self.model.fit(obs)
             score = self.model.score(obs)
@@ -76,6 +75,39 @@ class GaussianHMMFiltered:
             self._canonicalize_state_order()
 
         return self
+
+    def _restart_seeds(self) -> list:
+        """Deterministic per-restart seeds for the n_init random-restart loop.
+
+        Restart 0 always uses `self.random_state` directly, unchanged from
+        the pre-existing single-shot behavior, so an n_init=1 fit (and the
+        first restart of any n_init) is bit-for-bit identical to a plain
+        fit with the same random_state.
+
+        Restarts 1..n_init-1 used to reset `self.model.random_state = None`,
+        which let hmmlearn pull entropy from OS randomness on every restart:
+        the same (random_state, n_init) could silently produce a different
+        "best of n_init" model on every run (the model whose restart happened
+        to land on the best local optimum was not itself reproducible). Each
+        restart now gets its own seed drawn from an independent substream of
+        `random_state` via `numpy.random.SeedSequence.spawn`, so the same
+        random_state always produces the same full sequence of restart seeds
+        -> the same best-of-n_init result, every time, regardless of n_init
+        or thread/process scheduling.
+
+        When random_state is None, restarts are intentionally left
+        non-deterministic (None each), preserving the existing "no seed
+        requested" semantics.
+        """
+        if self.random_state is None:
+            return [None] * self.n_init
+
+        seeds = [self.random_state]
+        if self.n_init > 1:
+            seed_seq = np.random.SeedSequence(self.random_state)
+            children = seed_seq.spawn(self.n_init - 1)
+            seeds.extend(int(child.generate_state(1, dtype=np.uint32)[0]) for child in children)
+        return seeds
 
     def filtered_probabilities(self, obs: np.ndarray) -> np.ndarray:
         """Return filtered state probabilities for obs.
@@ -162,8 +194,20 @@ class GaussianHMMFiltered:
         """Compute crisis probability from filtered state probabilities.
 
         Crisis probability is defined as the summed probability mass of the
-        highest-variance states. With the canonical state ordering enforced
-        after fit, these are the last `top_k` states.
+        last `top_k` states under the canonical ordering (see
+        `_canonicalize_state_order`), i.e. the states with the highest
+        variance. Genuine ties (variances equal to within floating-point
+        precision) are broken by mean, but with correct per-state variance
+        extraction this is expected to be rare in practice — real fitted
+        states typically differ meaningfully in dispersion, so the ordering
+        is a genuine low-to-high-variance sort, not a mean-only fallback.
+        (An earlier bug in `_compute_state_variances` collapsed every
+        state's variance to the same averaged value for
+        `covariance_type="diag"` on hmmlearn>=0.3 — where covars_ is stored
+        as full (n_states, n_features, n_features) matrices rather than the
+        older 2D (n_states, n_features) layout this method expected — which
+        made every fit look mean-only-driven regardless of the true
+        per-state dispersion. Fixed; see `_compute_state_variances`.)
         """
         if top_k < 1 or top_k > self.n_states:
             raise ValueError("top_k must be between 1 and n_states")
@@ -174,6 +218,17 @@ class GaussianHMMFiltered:
         return np.sum(filtered_probs[:, self.n_states - top_k :], axis=1)
 
     def _canonicalize_state_order(self) -> None:
+        """Reorder fitted states from lowest to highest variance.
+
+        Sort key is `(variance, mean)` via `np.lexsort`, i.e. states are
+        primarily ordered by variance, with mean used only to break ties
+        among states whose variances are (nearly) equal. This relies on
+        `_compute_state_variances` returning genuine per-state values —
+        see that method's docstring for a bug (now fixed) that used to
+        silently collapse all states to the same averaged variance for
+        `covariance_type="diag"`, which made every fit's ordering fall
+        back to mean-only regardless of the model's true dispersion.
+        """
         self._check_fitted()
         variances = self._compute_state_variances()
         variances = np.asarray(variances)
@@ -217,11 +272,41 @@ class GaussianHMMFiltered:
         self.model.transmat_ = self.model.transmat_[order][:, order]
         self.model.means_ = self.model.means_[order]
 
-        if self.covariance_type in {"diag", "full", "spherical"}:
+        if self.covariance_type == "diag":
+            try:
+                reordered = np.asarray(self.model.covars_)[order]
+                # hmmlearn's covars_ SETTER for "diag" requires the compact
+                # (n_states, n_features) shape, but its GETTER on this
+                # hmmlearn version returns the expanded
+                # (n_states, n_features, n_features) diagonal-matrix form.
+                # Writing the getter's own shape straight back therefore
+                # always raised ValueError here, and the previous bare
+                # try/except silently swallowed it — covars_ was NEVER
+                # actually reordered whenever canonicalization needed a
+                # real (non-identity) permutation, leaving it misaligned
+                # with the (correctly reordered) means_/transmat_/
+                # startprob_. Extract the diagonal per state before
+                # writing back, in the shape the setter expects.
+                self.model.covars_ = np.array(
+                    [np.diag(reordered[state]) for state in range(self.n_states)]
+                )
+            except Exception:
+                # If covars are not indexable/reorderable in this form, leave as-is
+                pass
+        elif self.covariance_type == "full":
             try:
                 self.model.covars_ = self.model.covars_[order]
             except Exception:
-                # If covars are not indexable in this form, leave as-is
+                pass
+        elif self.covariance_type == "spherical":
+            try:
+                self.model.covars_ = self.model.covars_[order]
+            except Exception:
+                # Not exercised anywhere in this project (default
+                # covariance_type is "diag"); this hmmlearn version's
+                # "spherical" covars_ getter has its own shape quirks
+                # (doesn't even match n_states) that would need separate
+                # investigation if this type is ever actually used.
                 pass
         elif self.covariance_type == "tied":
             # tied covariance shared across states; nothing to reorder
@@ -239,14 +324,23 @@ class GaussianHMMFiltered:
 
         cov = np.asarray(cov)
         if self.covariance_type == "diag":
-            # diag covars may come in shapes (n_states, n_features), (n_states,), or (n_features,)
+            # hmmlearn >=0.3 stores "diag" covars as full (n_states, n_features,
+            # n_features) matrices with zero off-diagonal entries (same on-disk
+            # shape as "full"), not the older (n_states, n_features) 2D layout.
+            # Check the 3D case first and extract the true per-state variance as
+            # the trace (sum of the diagonal) — this used to fall through to the
+            # scalar-average fallback below, silently collapsing every state's
+            # variance to the same value and breaking variance-based ordering.
+            if cov.ndim == 3 and cov.shape[0] == self.n_states:
+                return np.array([np.trace(cov[state]) for state in range(self.n_states)], dtype=np.float64)
+            # older-hmmlearn / defensive fallbacks: (n_states, n_features), (n_states,), or (n_features,)
             if cov.ndim == 2 and cov.shape[0] == self.n_states:
                 return np.sum(cov, axis=1)
             if cov.ndim == 1 and cov.size == self.n_states:
                 return cov.astype(np.float64)
             if cov.ndim == 1:
                 return np.full(self.n_states, float(np.sum(cov)), dtype=np.float64)
-            # fallback
+            # last-resort fallback: shape unrecognized, can't extract per-state values
             return np.full(self.n_states, float(np.sum(cov) / self.n_states), dtype=np.float64)
 
         if self.covariance_type == "spherical":
