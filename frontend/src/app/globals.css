@@ -1,0 +1,43 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bg: #e8f4fc;
+  --bg-ring: #d7eaf7;
+  --surface: #ffffff;
+  --card: #ffffff;
+  --card-2: #eef2fa;
+  --border: #dce3f0;
+  --text: #101728;
+  --muted: #6b7690;
+  --muted-2: #98a2b8;
+  --calm: #0fa37d;
+  --mid: #c97f0a;
+  --crisis: #dd3f28;
+  --accent: #3e63e0;
+  --shadow: #a9b4cc;
+}
+
+body {
+  color: var(--text);
+  background: var(--bg);
+}
+
+@layer base {
+  html {
+    font-family: var(--font-noto-sans-kr), sans-serif;
+  }
+}
+
+@layer utilities {
+  .text-balance {
+    text-wrap: balance;
+  }
+
+  /* Financial-terminal-style numeral tabular alignment for mono figures. */
+  .tabular-nums-mono {
+    font-family: var(--font-jetbrains-mono), monospace;
+    font-variant-numeric: tabular-nums;
+  }
+}
