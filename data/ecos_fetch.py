@@ -5,6 +5,14 @@ observations" fetch pattern (see the 2026-08 pagination-bug writeup in
 kb-balance's market_data.fetch_market_rate_history and this project's
 fetch_real_ktb_series.py) so every asset-class fetcher in this project
 reuses one implementation of that fix instead of copies drifting apart.
+
+ECOS_API_KEY is read from regime-rader's OWN `.env` (repo root, gitignored
+-- see .env.example for the template). This used to load kb-balance's
+`.env` by hardcoded path instead; that was an acceptable shortcut for
+early iteration but became a hard blocker once api/ needed to run
+standalone (deployment, judges running this repo, anyone without
+kb-balance checked out locally) -- same reasoning as why hrp_core.py
+copies kb-balance's HRP math instead of importing it.
 """
 from __future__ import annotations
 
@@ -16,11 +24,11 @@ import pandas as pd
 import requests
 from dotenv import load_dotenv
 
-KB_BALANCE_ENV = r"C:\kb-balance\server\.env"
-load_dotenv(dotenv_path=KB_BALANCE_ENV)
+REGIME_RADER_ENV = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env")
+load_dotenv(dotenv_path=REGIME_RADER_ENV)
 ECOS_API_KEY = os.getenv("ECOS_API_KEY")
 if not ECOS_API_KEY:
-    raise RuntimeError(f"ECOS_API_KEY not found in {KB_BALANCE_ENV}")
+    raise RuntimeError(f"ECOS_API_KEY not found in {REGIME_RADER_ENV}")
 
 # Calendar days needed per requested observation, by ECOS cycle code, sized
 # generously so the query window always contains at least `days` real

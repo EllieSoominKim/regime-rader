@@ -3,24 +3,27 @@ conditional-volatility series for WalkForwardRegimeEngine, on real (not
 synthetic) data.
 
 This intentionally does NOT live in / modify the kb-balance project. It
-reuses that project's existing data source and model (per the ECOS API key
-already configured there) but keeps the trading-day dates that
-`kb_balance.server.services.market_data.fetch_market_rate_history` itself
-discards (it returns `list[float]`, no index) -- WalkForwardRegimeEngine
-requires a real `pd.DatetimeIndex`.
+originally reused that project's data source and model directly by path;
+[2026-08] that cross-repo path dependency was removed once api/ needed to
+run standalone -- GarchXModel is now a local copy
+(models/garch_x_model.py, see that module's docstring for what was kept
+vs. dropped) and ECOS_API_KEY comes from this repo's own .env (see
+data/ecos_fetch.py's docstring). This script keeps the trading-day dates
+that `kb_balance.server.services.market_data.fetch_market_rate_history`
+itself discards (it returns `list[float]`, no index) --
+WalkForwardRegimeEngine requires a real `pd.DatetimeIndex`.
 
 Source: ECOS (한국은행) stat table 817Y002 ("시장금리(일별)"), item code
 010200000 (국고채 3년물 / 3Y KTB), freq "D" -- identical request shape to
 kb-balance's `fetch_market_rate_history(days=500)`.
 
-Model: GarchXModel(p=1, q=1) from kb-balance's
-`server/models/garch_x_model.py` (vol="Garch", dist="normal", no exog),
-fit on `rate_series.diff().dropna() * 100` (scaled daily yield changes) --
-same as the earlier smoke test.
+Model: GarchXModel(p=1, q=1) (vol="Garch", dist="normal", no exog), fit on
+`rate_series.diff().dropna() * 100` (scaled daily yield changes) -- same
+as the earlier smoke test.
 
-Run with kb-balance's venv (has `arch`/`requests`/`python-dotenv`, which
-regime-rader's venv intentionally does not):
-    C:/kb-balance/server/venv/Scripts/python.exe data/fetch_real_ktb_series.py
+Run with regime-rader's own venv (has `arch`/`requests`/`python-dotenv`
+installed as of the api/ build -- see FINDINGS.md):
+    .venv/Scripts/python.exe data/fetch_real_ktb_series.py
 """
 from __future__ import annotations
 
@@ -28,13 +31,12 @@ import os
 import sys
 
 import pandas as pd
-from dotenv import load_dotenv
 
-KB_BALANCE_SERVER = r"C:\kb-balance\server"
-sys.path.insert(0, KB_BALANCE_SERVER)
-load_dotenv(dotenv_path=os.path.join(KB_BALANCE_SERVER, ".env"))
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+for _path in (REPO_ROOT, os.path.dirname(os.path.abspath(__file__))):
+    if _path not in sys.path:
+        sys.path.insert(0, _path)
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from ecos_fetch import fetch_ecos_series  # noqa: E402
 from models.garch_x_model import GarchXModel  # noqa: E402
 
