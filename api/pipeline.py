@@ -161,6 +161,30 @@ def compute_backtest_summary(asset_returns: pd.DataFrame, hrp_history: pd.DataFr
         split_metrics[f"regime_hrp__{label}"] = mod.compute_metrics(hrp_ret[mask], risk_free_annual)
         split_metrics[f"benchmark_6040__{label}"] = mod.compute_metrics(bench_ret[mask], risk_free_annual)
 
+    # [2026-08] Added for the dashboard's cumulative-return + underwater
+    # chart -- full_window/regime_split only ever carried aggregated
+    # metrics, not the day-by-day series a chart needs. hrp_ret/bench_ret
+    # already exist above (they're what compute_metrics is derived from);
+    # this just also returns them instead of discarding them, no new
+    # computation. crisis_probability comes from hrp_history's own column
+    # (WalkForwardHRPEngine.run() already carries it -- see
+    # regime_conditional_hrp.py) aligned to the same window.index, so the
+    # frontend can derive "high-crisis" shading FROM THE DATA (same
+    # threshold convention as everywhere else it buckets crisis_probability)
+    # instead of hardcoding HIGH_CRISIS_START/END as a date literal, which
+    # would silently go stale the next time this backtest re-runs on a
+    # shifted window.
+    crisis_probability = hrp_history.loc[window.index, "crisis_probability"]
+    daily_returns = [
+        {
+            "date": str(date.date()),
+            "regime_hrp": float(hr),
+            "benchmark_6040": float(br),
+            "crisis_probability": float(cp) if pd.notna(cp) else None,
+        }
+        for date, hr, br, cp in zip(window.index, hrp_ret.values, bench_ret.values, crisis_probability.values)
+    ]
+
     return {
         "window_start": str(start_date.date()),
         "window_end": str(end_date.date()),
@@ -168,6 +192,7 @@ def compute_backtest_summary(asset_returns: pd.DataFrame, hrp_history: pd.DataFr
         "risk_free_annual": risk_free_annual,
         "full_window": full_metrics,
         "regime_split": split_metrics,
+        "daily_returns": daily_returns,
         "assumptions": {
             "benchmark_weights": mod.BENCHMARK_TARGET,
             "benchmark_rebalance": "monthly (first trading day of each calendar month)",

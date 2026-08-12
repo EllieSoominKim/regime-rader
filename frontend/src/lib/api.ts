@@ -97,6 +97,18 @@ export interface BacktestWindow {
   benchmark_6040: BacktestMetrics;
 }
 
+export interface BacktestDailyReturn {
+  date: string;
+  regime_hrp: number;
+  benchmark_6040: number;
+  /** From hrp_history's own column, aligned to this row's date -- lets
+   * the frontend derive "high-crisis" date ranges from the data itself
+   * (see lib/backtestHistory.ts's findHighCrisisRanges) instead of a
+   * hardcoded HIGH_CRISIS_START/END literal, which would go stale the
+   * next time this backtest re-runs on a shifted window. */
+  crisis_probability: number | null;
+}
+
 export interface RealBacktestSummary {
   window_start: string;
   window_end: string;
@@ -105,6 +117,7 @@ export interface RealBacktestSummary {
   full_window: BacktestWindow;
   /** keys like "regime_hrp__high_crisis_feb_jun_2026", "benchmark_6040__rest_of_window" */
   regime_split: Record<string, BacktestMetrics>;
+  daily_returns: BacktestDailyReturn[];
   assumptions: {
     benchmark_weights: Partial<Record<AssetKey, number>>;
     benchmark_rebalance: string;

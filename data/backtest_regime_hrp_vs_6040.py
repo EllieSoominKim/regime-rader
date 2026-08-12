@@ -70,7 +70,25 @@ def compute_metrics(returns: pd.Series, risk_free_annual: float) -> dict:
     annualized_return = float((1 + total_return) ** (TRADING_DAYS / n_days) - 1)
     annualized_vol = float(returns.std() * np.sqrt(TRADING_DAYS))
     sharpe = (annualized_return - risk_free_annual) / annualized_vol if annualized_vol > 0 else np.nan
-    running_max = cumulative.cummax()
+    # [2026-08 fix] cumulative.cummax() alone takes its running max starting
+    # from cumulative.iloc[0] (day 1's OWN realized value) -- if day 1 is a
+    # loss, cumulative.iloc[0] < 1.0, so cummax()'s first element IS that
+    # sub-1.0 value, and drawdown.iloc[0] computes to exactly 0 (a value
+    # divided by itself) no matter how large day 1's loss was. That silently
+    # drops a real drawdown from the capital an investor actually started
+    # with (1.0) -- not a rounding issue, an off-by-one in what counts as
+    # the initial peak. Clamping the running max to never fall below 1.0
+    # is algebraically identical to prepending an implicit day-0 value of
+    # 1.0 before taking cummax (both give running_max[t] = max(1.0,
+    # cumulative[0..t])), and matches the frontend's independent
+    # implementation (frontend/src/lib/backtestHistory.ts's buildEquityCurve,
+    # which seeds its peak at 1.0 for exactly this reason) -- verified a
+    # no-op on every currently-reported number in this project (see
+    # FINDINGS.md's cross-check note on this fix) since no window's actual
+    # day 1 happens to be a loss day for either strategy; kept as a
+    # correctness fix regardless, since this backtest re-runs on a shifting
+    # window and whichever day lands as day 1 next time is arbitrary.
+    running_max = cumulative.cummax().clip(lower=1.0)
     drawdown = cumulative / running_max - 1
     mdd = float(drawdown.min())
     calmar = annualized_return / abs(mdd) if mdd != 0 else np.nan

@@ -137,6 +137,25 @@ occur in the one real crisis episode available.
 labeled synthetic in all outputs — not to be cited as real historical
 performance.
 
+**[2026-08-12 correction]** The MDD figures above (-0.43%/-12.24%, "~28x")
+were computed with a `compute_metrics` bug: its running-max calculation
+didn't seed the peak at the starting capital (1.0), so a day-1 loss
+within a sliced sub-window could go uncounted. Fixed in
+`data/backtest_regime_hrp_vs_6040.py` / `data/backtest_synthetic_crash_stress_test.py`.
+Corrected MDD: regime_hrp -0.62%, benchmark_6040 -12.57%, ratio ~20.3x.
+Every other number in this file was checked against the fix directly
+and is unaffected (audited all 16 `compute_metrics` call sites — full
+window, `high_crisis_feb_jun_2026`, `rest_of_window`, and this
+`crash_window_25d` slice — across both the real and synthetic backtests,
+on both the frozen historical data and fresh live data; this
+`crash_window_25d` slice was the only one where the bug actually changed
+a number). `total_return` is untouched — it never depended on this
+logic — so the "cuts the loss ~30x" total-return claim above still
+stands; only the MDD figures and the "~28x" drawdown-ratio claim moved.
+`data/synthetic_stress_test_summary.json` has been regenerated with the
+fix; the pre-fix version is archived at
+`data/archive/synthetic_stress_test_summary_2026-08-11_prefix-bug.json`.
+
 ---
 
 ## Open items for later (not started, or explicitly deferred)

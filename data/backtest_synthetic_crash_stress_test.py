@@ -87,7 +87,14 @@ def compute_metrics(returns: pd.Series, risk_free_annual: float) -> dict:
     annualized_return = float((1 + total_return) ** (TRADING_DAYS / n_days) - 1) if n_days > 0 else np.nan
     annualized_vol = float(returns.std() * np.sqrt(TRADING_DAYS))
     sharpe = (annualized_return - risk_free_annual) / annualized_vol if annualized_vol > 0 else np.nan
-    running_max = cumulative.cummax()
+    # [2026-08 fix] see the identical fix + full rationale in
+    # backtest_regime_hrp_vs_6040.py's compute_metrics -- this is the same
+    # duplicated function, same bug, same fix: clamp the running max to
+    # never fall below the starting capital of 1.0, so a day-1 loss (in
+    # ANY sliced sub-window, including crash_window_25d/high_crisis, each
+    # of which restarts this computation at its own first day) registers
+    # as a real drawdown instead of silently computing to exactly 0.
+    running_max = cumulative.cummax().clip(lower=1.0)
     drawdown = cumulative / running_max - 1
     mdd = float(drawdown.min())
     calmar = annualized_return / abs(mdd) if mdd != 0 else np.nan
