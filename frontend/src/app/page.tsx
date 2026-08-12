@@ -37,6 +37,16 @@ export default async function HomePage() {
         왜 이렇게 배분됐을까요?
         <span aria-hidden="true">→</span>
       </Link>
+
+      {/* Temporary text-link nav until the full cross-screen shell (bottom
+          tab bar, per the 5-screen product brief) is built. */}
+      <Link
+        href="/history"
+        className="flex items-center justify-center gap-1 py-1 font-mono text-xs uppercase tracking-[0.1em] text-muted"
+      >
+        국면 히스토리 보기
+        <span aria-hidden="true">→</span>
+      </Link>
     </div>
   );
 }
