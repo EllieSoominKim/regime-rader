@@ -1,8 +1,10 @@
 import type { Metadata } from "next";
+import { Suspense } from "react";
 import { Noto_Sans_KR, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
 import { Header } from "@/components/Header";
 import { RadarBackground } from "@/components/RadarBackground";
+import { RiskTierSync } from "@/components/RiskTierSync";
 
 const notoSansKR = Noto_Sans_KR({
   subsets: ["latin"],
@@ -37,6 +39,13 @@ export default function RootLayout({
         className={`${notoSansKR.variable} ${jetbrainsMono.variable} font-kr antialiased`}
       >
         <RadarBackground />
+        {/* useSearchParams (inside RiskTierSync) requires a Suspense
+            boundary in the App Router, or the whole route opts into
+            client-side-only rendering -- see Next.js's own error for this.
+            No fallback needed: this renders nothing either way. */}
+        <Suspense fallback={null}>
+          <RiskTierSync />
+        </Suspense>
         <Header />
         <main className="mx-auto max-w-md px-4 pb-16 pt-4">{children}</main>
       </body>

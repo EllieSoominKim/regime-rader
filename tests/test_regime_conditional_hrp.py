@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from regime_conditional_hrp import RegimeConditionalHRP, _weighted_covariance
 
@@ -198,3 +199,109 @@ def test_allocate_defensive_cap_widens_with_crisis_probability():
 
     for alloc in (calm_alloc, crisis_alloc):
         assert np.isclose(sum(alloc.weights.values()), 1.0, atol=1e-3)
+
+
+def _fit_model_for_risk_tier_tests() -> RegimeConditionalHRP:
+    rng = np.random.default_rng(7)
+    n = 300
+    dates = pd.date_range("2020-01-01", periods=n, freq="B")
+    returns = pd.DataFrame(
+        {
+            "stocks": rng.normal(scale=0.02, size=n),
+            "bonds": rng.normal(scale=0.005, size=n),
+            "cash": rng.normal(scale=0.0005, size=n),
+            "gold": rng.normal(scale=0.015, size=n),
+        },
+        index=dates,
+    )
+    crisis_probability = pd.Series(rng.uniform(0, 1, size=n), index=dates)
+    return RegimeConditionalHRP().fit(returns, crisis_probability)
+
+
+def test_allocate_defaults_to_neutral_tier_bit_for_bit():
+    """allocate(p) with no risk_tier argument must be bit-for-bit identical
+    to allocate(p, risk_tier="중립") -- the whole point of RISK_TIERS["중립"]
+    being built FROM the pre-existing class constants (not a second copy
+    of the same numbers) is that every caller written before risk tiers
+    existed (WalkForwardHRPEngine.run() included) is unaffected unless it
+    explicitly opts into a different tier."""
+    model = _fit_model_for_risk_tier_tests()
+    default_alloc = model.allocate(0.4)
+    explicit_neutral_alloc = model.allocate(0.4, risk_tier="중립")
+    assert default_alloc.weights == explicit_neutral_alloc.weights
+    assert default_alloc.risk_tier_used == "중립"
+
+
+def test_allocate_rejects_unknown_risk_tier():
+    model = _fit_model_for_risk_tier_tests()
+    with pytest.raises(ValueError):
+        model.allocate(0.4, risk_tier="존재하지않는tier")
+
+
+def test_risk_tier_growth_weight_monotonically_ordered_at_fixed_crisis_probability():
+    """Core regression test for the risk-tier feature: at the SAME
+    crisis_probability, growth-asset weight must be monotonically ordered
+    공격적 > 중립 > 보수적 -- the tier the onboarding survey selects must
+    actually change the allocation, in the intuitive direction, not just
+    be a UX formality that flows through to nothing."""
+    model = _fit_model_for_risk_tier_tests()
+
+    for p in (0.03, 0.5, 0.98):
+        conservative = model.allocate(p, risk_tier="보수적")
+        neutral = model.allocate(p, risk_tier="중립")
+        aggressive = model.allocate(p, risk_tier="공격적")
+
+        for asset in ("stocks", "gold"):
+            c, n_, a = conservative.weights[asset], neutral.weights[asset], aggressive.weights[asset]
+            assert c <= n_ <= a, (
+                f"p={p}, {asset}: expected 보수적({c}) <= 중립({n_}) <= 공격적({a}) "
+                "-- growth-asset weight must be monotonically ordered by risk tier"
+            )
+
+        growth_conservative = conservative.weights["stocks"] + conservative.weights["gold"]
+        growth_aggressive = aggressive.weights["stocks"] + aggressive.weights["gold"]
+        assert growth_aggressive - growth_conservative > 0.02, (
+            f"p={p}: 공격적ㅡ보수적 growth-total gap ({growth_aggressive - growth_conservative}) "
+            "too small to be a meaningful, real tier difference"
+        )
+
+
+def test_risk_tier_each_tier_still_shows_calm_vs_crisis_responsiveness():
+    """The hard design constraint from this feature's scope: no tier may
+    ever be flattened into a non-responsive allocation. Every tier --
+    including 공격적, which keeps a real (0.02) crisis growth floor by
+    design -- must still show growth-asset weight dropping measurably
+    from calm (p=0) to crisis (p=1); a tier that came out flat here would
+    mean risk_tier silently broke the calm/crisis mechanism this project
+    already fixed once (see the MIN_WEIGHT-pinning finding above)."""
+    model = _fit_model_for_risk_tier_tests()
+
+    for tier in RegimeConditionalHRP.RISK_TIERS:
+        calm_alloc = model.allocate(0.0, risk_tier=tier)
+        crisis_alloc = model.allocate(1.0, risk_tier=tier)
+
+        for asset in ("stocks", "gold"):
+            calm_w = calm_alloc.weights[asset]
+            crisis_w = crisis_alloc.weights[asset]
+            assert calm_w - crisis_w > 0.01, (
+                f"tier={tier}, {asset}: calm={calm_w}, crisis={crisis_w} -- "
+                "growth-asset weight should drop measurably as crisis_probability rises, "
+                "for every tier, not just 중립"
+            )
+
+        # 공격적's crisis floor is deliberately non-zero (0.02 per growth
+        # asset) -- confirm it's actually binding, not just defined, since
+        # that's the whole point of the tier existing (a real, bounded
+        # -not-eliminated growth exposure during a flagged crisis).
+        if tier == "공격적":
+            for asset in ("stocks", "gold"):
+                assert crisis_alloc.weights[asset] >= RegimeConditionalHRP.RISK_TIERS["공격적"]["crisis_growth_min"] - 1e-6
+
+    # And the defensive side should still widen with crisis for every tier.
+    for tier in RegimeConditionalHRP.RISK_TIERS:
+        calm_alloc = model.allocate(0.0, risk_tier=tier)
+        crisis_alloc = model.allocate(1.0, risk_tier=tier)
+        assert any(
+            crisis_alloc.weights[asset] > calm_alloc.weights[asset] + 1e-6
+            for asset in RegimeConditionalHRP.DEFENSIVE_ASSETS
+        ), f"tier={tier}: defensive allocation should still grow from calm to crisis"

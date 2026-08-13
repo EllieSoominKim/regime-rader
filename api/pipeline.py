@@ -305,12 +305,52 @@ def compute_daily_bundle(days: int = DAYS) -> DailyBundle:
     )
 
 
-def compute_today_snapshot(days: int = DAYS) -> dict:
+def compute_today_snapshot(days: int = DAYS, risk_tier: str = "중립") -> dict:
     """Lightweight live path for /api/regime/today: ONE single-shot model
     selection fit over the most recent `days` observations (not the
     94-refit walk-forward loop that makes compute_regime_history ~85s),
     then one RegimeConditionalHRP fit and a single .allocate() call for
-    today."""
+    today.
+
+    [2026-08] risk_tier: passed straight through to both .allocate() calls
+    below (today's and the previous-day one) -- see
+    RegimeConditionalHRP.RISK_TIERS for the tier definitions. The HMM fit
+    and the calm/crisis covariance fit are both tier-INDEPENDENT (a risk
+    tier only changes allocate()'s floor/cap bounds, never the regime
+    read or the covariance estimate itself), so this function still does
+    exactly one fit of each per call regardless of which tier is
+    requested -- routers/regime.py caches each tier under its own key
+    (see that module), so in steady state this still runs at most once
+    per (trading day, tier) triple, not once per request.
+
+    [2026-08] Extended for the explainability card (설명가능성 카드), scoped
+    before building it rather than inventing frontend-side numbers the
+    backend doesn't actually have -- every addition below is data already
+    sitting in memory from the computation above, just not previously
+    returned:
+      - previous_crisis_probability/date: crisis_prob_series already
+        covers the whole fetched window, not just today -- iloc[-2] is
+        the prior trading day's reading from this SAME single-fit (not a
+        different pipeline than "today's" number, so the delta the card
+        shows is always internally consistent).
+      - conditional_volatility_today/percentile: `series` (the GARCH-X
+        output) already holds today's raw reading; percentile is its rank
+        within the same already-fetched window, one more computation on
+        data already in memory, no new fetch.
+      - previous_recommended_weights/combined_defensive_weight: `hrp` is
+        already fit; calling .allocate() a second time on
+        previous_crisis_probability is cheap (deterministic clustering
+        math on an already-fit model, not a refit) and gives an
+        apples-to-apples "what changed" comparison from the same model
+        instance that produced today's allocation.
+    Deliberately NOT added: calm/crisis correlation matrices for a
+    correlation-behavior card -- those fields exist on `allocation`
+    already, but presenting them honestly needs an actual checked claim
+    about which direction they move (not assumed) plus surfacing gold's
+    documented data-quality caveats (see RegimeConditionalHRP's
+    docstring), which is more than a field passthrough. Left for a
+    follow-up.
+    """
     series = fetch_ktb_conditional_volatility(days=days)
 
     comparison = compare_regime_counts(
@@ -334,12 +374,29 @@ def compute_today_snapshot(days: int = DAYS) -> dict:
     today_state_probs = filtered_probs[-1]
     today_regime = int(np.argmax(today_state_probs))
 
+    has_prior_reading = len(crisis_prob_series) >= 2
+    previous_date = series.index[-2] if has_prior_reading else None
+    previous_crisis_probability = float(crisis_prob_series.iloc[-2]) if has_prior_reading else None
+
+    conditional_volatility_today = float(series.iloc[-1])
+    conditional_volatility_percentile = float((series < series.iloc[-1]).mean())
+
     asset_returns = build_asset_returns_matrix(series.index)
     hrp = RegimeConditionalHRP().fit(asset_returns, crisis_prob_series)
-    allocation = hrp.allocate(today_crisis_probability)
+    allocation = hrp.allocate(today_crisis_probability, risk_tier=risk_tier)
+
+    previous_recommended_weights = None
+    previous_combined_defensive_weight = None
+    if has_prior_reading:
+        previous_allocation = hrp.allocate(previous_crisis_probability, risk_tier=risk_tier)
+        previous_recommended_weights = previous_allocation.weights
+        previous_combined_defensive_weight = float(
+            sum(previous_allocation.weights.get(a, 0.0) for a in RegimeConditionalHRP.DEFENSIVE_ASSETS)
+        )
 
     return {
         "date": str(today_date.date()),
+        "risk_tier": risk_tier,
         "selected_n_states": int(winner.n_states),
         "selection_criterion": LIVE_SELECTION_CRITERION,
         "crisis_probability": today_crisis_probability,
@@ -355,6 +412,12 @@ def compute_today_snapshot(days: int = DAYS) -> dict:
         "crisis_covariance_shrunk": allocation.crisis_covariance_shrunk,
         "aic_by_candidate": {int(c.n_states): float(c.aic) for c in comparison.candidates},
         "bic_by_candidate": {int(c.n_states): float(c.bic) for c in comparison.candidates},
+        "previous_date": str(previous_date.date()) if previous_date is not None else None,
+        "previous_crisis_probability": previous_crisis_probability,
+        "previous_recommended_weights": previous_recommended_weights,
+        "previous_combined_defensive_weight": previous_combined_defensive_weight,
+        "conditional_volatility_today": conditional_volatility_today,
+        "conditional_volatility_percentile": conditional_volatility_percentile,
     }
 
 

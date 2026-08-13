@@ -6,6 +6,8 @@
  * WalkForwardHRPEngine row schema), not guessed.
  */
 
+import type { RiskTier } from "@/lib/riskTier";
+
 const API_BASE_URL =
   process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
 
@@ -38,6 +40,20 @@ export interface RegimeToday extends CacheEnvelope {
   crisis_covariance_shrunk: boolean;
   aic_by_candidate: Record<string, number>; // keys are n_states as strings, e.g. "2","3"
   bic_by_candidate: Record<string, number>;
+  /** Added for the explainability card -- null only if there's no prior
+   * trading day in the fetched window at all (first-ever run). */
+  previous_date: string | null;
+  previous_crisis_probability: number | null;
+  previous_recommended_weights: Partial<Record<AssetKey, number>> | null;
+  previous_combined_defensive_weight: number | null;
+  /** Raw GARCH-X conditional volatility reading (KTB 3Y yield), not a
+   * percentage -- crisis_probability is the derived, interpretable
+   * signal; this is the underlying driver behind it. */
+  conditional_volatility_today: number;
+  /** Fraction (0-1) of days in the fetched window with a LOWER reading
+   * than today's -- e.g. 0.79 means today is higher than 79% of the last
+   * ~500 trading days. */
+  conditional_volatility_percentile: number;
 }
 
 // ---- GET /api/regime/history -------------------------------------------
@@ -164,8 +180,15 @@ async function apiFetch<T>(path: string): Promise<T> {
   return res.json() as Promise<T>;
 }
 
-export function getRegimeToday(): Promise<RegimeToday> {
-  return apiFetch<RegimeToday>("/api/regime/today");
+/** riskTier is optional only for callers that genuinely don't care (e.g. a
+ * future admin/debug view) -- both app pages that call this pass the
+ * request-scoped tier resolved from the URL (see lib/riskTier.ts's
+ * parseRiskTier + components/RiskTierSync.tsx), never the bare default,
+ * so a user's onboarding choice actually reaches the backend's cache-keyed
+ * /api/regime/today (see api/routers/regime.py). */
+export function getRegimeToday(riskTier?: RiskTier): Promise<RegimeToday> {
+  const query = riskTier ? `?risk_tier=${encodeURIComponent(riskTier)}` : "";
+  return apiFetch<RegimeToday>(`/api/regime/today${query}`);
 }
 
 export function getRegimeHistory(): Promise<RegimeHistory> {

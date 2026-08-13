@@ -1,10 +1,26 @@
+import { cookies } from "next/headers";
 import Link from "next/link";
 import { RadarGauge } from "@/components/RadarGauge";
 import { AllocationDonut } from "@/components/AllocationDonut";
 import { getRegimeToday } from "@/lib/api";
+import { resolveRiskTier, RISK_TIER_COOKIE } from "@/lib/riskTier";
 
-export default async function HomePage() {
-  const today = await getRegimeToday();
+// [2026-08] risk_tier is read cookie-first, not from the URL alone --
+// reading only searchParams (the URL) meant a cold load (fresh URL/
+// bookmark/hard refresh) always rendered the 중립 default first, THEN
+// flashed to the real tier once client-side JS (RiskTierSync) could run
+// and correct the URL -- confirmed via SSR diff (see lib/riskTier.ts's
+// module docstring). The cookie IS present on that very first request, so
+// resolveRiskTier can get it right on the very first render, no flash.
+// RiskTierSync (mounted once in the root layout) keeps both the cookie and
+// the URL param in sync with localStorage as a secondary mechanism.
+export default async function HomePage({
+  searchParams,
+}: {
+  searchParams: { risk_tier?: string };
+}) {
+  const riskTier = resolveRiskTier(cookies().get(RISK_TIER_COOKIE)?.value, searchParams.risk_tier);
+  const today = await getRegimeToday(riskTier);
 
   return (
     <div className="flex flex-col gap-4">

@@ -115,6 +115,7 @@ class RegimeConditionalAllocation:
     calm_correlation: pd.DataFrame
     crisis_correlation: pd.DataFrame
     crisis_probability_used: float
+    risk_tier_used: str
     effective_n_calm: float
     effective_n_crisis: float
     calm_covariance_shrunk: bool
@@ -222,6 +223,81 @@ class RegimeConditionalHRP:
     CALM_GROWTH_MIN_WEIGHT = 0.05
     CRISIS_GROWTH_MIN_WEIGHT = 0.0
 
+    # [2026-08] Risk-tier support: shift/scale the calm<->crisis
+    # interpolation RANGE per tier, without touching the interpolation
+    # mechanism itself (allocate() still blends by crisis_probability
+    # exactly as before -- see the method body) and without ever
+    # collapsing any tier to a flat, non-responsive allocation. Only the
+    # two ranges that actually bind in this asset universe are tiered
+    # (per the 2026-08 MIN_WEIGHT finding above: GROWTH_MAX_WEIGHT and
+    # DEFENSIVE_MIN_WEIGHT are never the constraint that ends up binding
+    # given how small raw growth weights and how large raw defensive
+    # weights are here, so making THOSE tier-dependent would be exactly
+    # the kind of change that doesn't show up in final weights -- the
+    # same mistake the MIN_WEIGHT bug already taught us to avoid). Those
+    # two stay tier-invariant on purpose.
+    #
+    # 중립's entries below are literally CALM_DEFENSIVE_MAX_WEIGHT etc.
+    # (no duplicated numbers to drift out of sync), so risk_tier="중립"
+    # -- allocate()'s default -- is bit-for-bit identical to this
+    # class's pre-risk-tier behavior; every existing caller is
+    # unaffected unless it opts into a different tier.
+    #
+    # 보수적/공격적 numbers and reasoning (approved 2026-08-12, sanity
+    # -checked against real fresh data before shipping):
+    #   - calm_defensive_max: +-10pp off 중립's 0.50 calm anchor.
+    #   - crisis_defensive_max: 보수적 keeps 중립's full 0.35 amplitude
+    #     (gets the complete benefit of crisis widening); 공격적's
+    #     amplitude compresses to 0.30 -- smaller, never zero.
+    #   - calm_growth_min: 보수적 wants less mandatory growth exposure
+    #     even when calm (0.02); 공격적 wants more (0.08).
+    #   - crisis_growth_min: 중립/보수적 both floor to the hard minimum
+    #     in a crisis (0.00, matching the existing "the floor has to
+    #     actually reach 0" reasoning for 중립 above). 공격적 keeps a
+    #     real, BINDING 2% floor here (raw crisis-covariance-driven
+    #     growth weights are ~0.1-0.3% in this universe, well below
+    #     0.02) -- this is a deliberate product choice, not an oversight:
+    #     an 공격적-tier user WILL experience a real, bounded-not
+    #     -eliminated drawdown in a genuine crisis if growth assets
+    #     crash, because they keep real growth exposure by design. This
+    #     must be disclosed to the user at tier-selection time (see the
+    #     frontend's TIER_DISCLAIMERS), not discovered during an actual
+    #     crisis.
+    #   Empirical note from the real-data sanity check: the per-asset
+    #   amplitude parameters above (0.35 vs 0.30 for defensive_max) do
+    #   NOT translate 1:1 into the realized PORTFOLIO-level swing --
+    #   apply_allocation_bounds' water-filling redistribution interacts
+    #   across all 4 assets' bounds simultaneously, so 공격적's smaller
+    #   per-asset cap amplitude produced a LARGER realized defensive
+    #   -total swing than 중립's in the real-data check (81.8%->95.8%,
+    #   14pp, vs 중립's 90.3%->99.4%, 9.1pp) even though the per-asset
+    #   parameter was smaller. Monotonic ordering and per-tier
+    #   responsiveness (this class's actual contract, see
+    #   test_risk_tier_* below) both still hold; "amplitude" just isn't
+    #   a knob tunable with parameter-level precision, it's an emergent
+    #   property of the bound system.
+    RISK_TIERS: Dict[str, Dict[str, float]] = {
+        "보수적": {
+            "calm_defensive_max": 0.60,
+            "crisis_defensive_max": 0.95,
+            "calm_growth_min": 0.02,
+            "crisis_growth_min": 0.00,
+        },
+        "중립": {
+            "calm_defensive_max": CALM_DEFENSIVE_MAX_WEIGHT,
+            "crisis_defensive_max": CRISIS_DEFENSIVE_MAX_WEIGHT,
+            "calm_growth_min": CALM_GROWTH_MIN_WEIGHT,
+            "crisis_growth_min": CRISIS_GROWTH_MIN_WEIGHT,
+        },
+        "공격적": {
+            "calm_defensive_max": 0.40,
+            "crisis_defensive_max": 0.70,
+            "calm_growth_min": 0.08,
+            "crisis_growth_min": 0.02,
+        },
+    }
+    DEFAULT_RISK_TIER = "중립"
+
     def __init__(self) -> None:
         self.asset_names_: Optional[List[str]] = None
         self.calm_covariance_: Optional[pd.DataFrame] = None
@@ -274,9 +350,16 @@ class RegimeConditionalHRP:
         self.crisis_correlation_ = covariance_to_correlation(crisis_cov)
         return self
 
-    def allocate(self, current_crisis_probability: float) -> RegimeConditionalAllocation:
+    def allocate(
+        self, current_crisis_probability: float, risk_tier: str = DEFAULT_RISK_TIER
+    ) -> RegimeConditionalAllocation:
         if self.calm_covariance_ is None:
             raise ValueError("RegimeConditionalHRP must be fit() before allocate()")
+        if risk_tier not in self.RISK_TIERS:
+            raise ValueError(
+                f"Unknown risk_tier {risk_tier!r}; must be one of {sorted(self.RISK_TIERS)}"
+            )
+        tier = self.RISK_TIERS[risk_tier]
 
         p = float(np.clip(current_crisis_probability, 0.0, 1.0))
         blended_cov = (1 - p) * self.calm_covariance_ + p * self.crisis_covariance_
@@ -289,8 +372,8 @@ class RegimeConditionalHRP:
 
         max_weight = {
             asset: (
-                self.CALM_DEFENSIVE_MAX_WEIGHT
-                + p * (self.CRISIS_DEFENSIVE_MAX_WEIGHT - self.CALM_DEFENSIVE_MAX_WEIGHT)
+                tier["calm_defensive_max"]
+                + p * (tier["crisis_defensive_max"] - tier["calm_defensive_max"])
                 if asset in self.DEFENSIVE_ASSETS
                 else self.GROWTH_MAX_WEIGHT
             )
@@ -300,8 +383,8 @@ class RegimeConditionalHRP:
             asset: (
                 self.DEFENSIVE_MIN_WEIGHT
                 if asset in self.DEFENSIVE_ASSETS
-                else self.CALM_GROWTH_MIN_WEIGHT
-                + p * (self.CRISIS_GROWTH_MIN_WEIGHT - self.CALM_GROWTH_MIN_WEIGHT)
+                else tier["calm_growth_min"]
+                + p * (tier["crisis_growth_min"] - tier["calm_growth_min"])
             )
             for asset in self.asset_names_
         }
@@ -314,6 +397,7 @@ class RegimeConditionalHRP:
             calm_correlation=self.calm_correlation_,
             crisis_correlation=self.crisis_correlation_,
             crisis_probability_used=p,
+            risk_tier_used=risk_tier,
             effective_n_calm=self.effective_n_calm_,
             effective_n_crisis=self.effective_n_crisis_,
             calm_covariance_shrunk=self.calm_covariance_shrunk_,

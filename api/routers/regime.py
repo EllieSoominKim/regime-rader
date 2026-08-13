@@ -6,6 +6,9 @@ for the shared "compute once per day, serve cached otherwise" pattern.
 """
 from __future__ import annotations
 
+from functools import partial
+from typing import Literal
+
 from fastapi import APIRouter
 
 from api.cache import cache
@@ -14,7 +17,13 @@ from api.pipeline import compute_daily_bundle, compute_today_snapshot, df_to_rec
 router = APIRouter(prefix="/api/regime", tags=["regime"])
 
 HISTORY_CACHE_KEY = "daily_bundle"  # shared with routers/hrp.py and routers/backtest.py
-TODAY_CACHE_KEY = "regime_today"
+TODAY_CACHE_KEY_PREFIX = "regime_today"
+
+# There's no user-accounts/persistence layer in this MVP (see
+# RegimeConditionalHRP.RISK_TIERS), so risk_tier travels as a request
+# query param, not server-side user state -- the frontend persists the
+# user's chosen tier itself (localStorage) and sends it on every request.
+RiskTier = Literal["보수적", "중립", "공격적"]
 
 REGIME_HISTORY_COLUMNS = ["crisis_probability", "selected_n_states", "regime", "refit"]
 
@@ -42,8 +51,16 @@ def regime_history():
 
 
 @router.get("/today")
-def regime_today():
-    result = cache.get_or_compute(TODAY_CACHE_KEY, compute_today_snapshot)
+def regime_today(risk_tier: RiskTier = "중립"):
+    # Cache key MUST include risk_tier, not just the trading day -- three
+    # tiers means three independent cache entries (still cheap: at most
+    # one ~14s single-fit compute per tier per day, not per request), one
+    # per (trading_day, risk_tier) pair. Using a flat "regime_today" key
+    # here would silently serve one tier's cached allocation to every
+    # other tier's request -- exactly the bug this comment is here to
+    # prevent a future edit from reintroducing.
+    cache_key = f"{TODAY_CACHE_KEY_PREFIX}:{risk_tier}"
+    result = cache.get_or_compute(cache_key, partial(compute_today_snapshot, risk_tier=risk_tier))
     return {
         "cache_hit": result.cache_hit,
         "computed_on": result.computed_on.isoformat(),
