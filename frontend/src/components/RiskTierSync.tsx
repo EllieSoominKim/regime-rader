@@ -51,6 +51,13 @@ export function RiskTierSync() {
     // a browser whose cookie fell out of sync would keep re-running this
     // whole effect on every navigation instead of settling.
     setStoredRiskTier(stored);
+    // The cookie just changed (or was written for the first time) -- any
+    // route already cached client-side under the OLD/missing cookie value
+    // (Next's Router Cache, see next.config.mjs's staleTimes) needs
+    // invalidating too, same reasoning as onboarding's start(). Cheap and
+    // rare: this whole branch only runs on an actual mismatch, not every
+    // navigation.
+    router.refresh();
 
     const params = new URLSearchParams(searchParams.toString());
     params.set("risk_tier", stored);

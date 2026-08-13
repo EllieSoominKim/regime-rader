@@ -3,7 +3,7 @@ import Link from "next/link";
 import { RadarGauge } from "@/components/RadarGauge";
 import { AllocationDonut } from "@/components/AllocationDonut";
 import { getRegimeToday } from "@/lib/api";
-import { resolveRiskTier, RISK_TIER_COOKIE } from "@/lib/riskTier";
+import { resolveRiskTier, RISK_TIER_COOKIE, RISK_TIER_LABELS } from "@/lib/riskTier";
 
 // [2026-08] risk_tier is read cookie-first, not from the URL alone --
 // reading only searchParams (the URL) meant a cold load (fresh URL/
@@ -42,12 +42,40 @@ export default async function HomePage({
       </section>
 
       <section className="rounded-2xl border border-border bg-card p-5 shadow-card">
-        <h2 className="font-kr text-base font-medium text-text">오늘의 추천 배분</h2>
+        <div className="flex items-baseline justify-between">
+          <h2 className="font-kr text-base font-medium text-text">오늘의 추천 배분</h2>
+          {/* Contextual entry point into /onboarding, right where the tier
+              actually changes what's shown -- see lib/riskSurvey.ts. Also
+              the only re-diagnosis entry point besides the result screen's
+              own "다시 진단하기" (per the plan: Home links to /onboarding,
+              not just a not-yet-built settings screen). */}
+          <Link href="/onboarding" className="font-mono text-[11px] text-muted-2">
+            {RISK_TIER_LABELS[riskTier]} 기준
+          </Link>
+        </div>
         <AllocationDonut weights={today.recommended_weights} className="mt-3" />
       </section>
 
       <Link
-        href="/explainability"
+        href={`/explainability?risk_tier=${encodeURIComponent(riskTier)}`}
+        // [2026-08-13] Confirmed via integration testing: a client-side
+        // Link navigation into /explainability could render with 중립's
+        // numbers regardless of the actual risk-tier cookie -- reproduced
+        // even with prefetch disabled and even immediately after a fresh
+        // router.refresh(), so this isn't ONE specific cache layer we can
+        // name and selectively invalidate; something in Next 14's
+        // client-navigation request path for a cookies()-only-dynamic
+        // route isn't reliably re-resolving the cookie the way a hard
+        // reload or a direct request always correctly does (verified
+        // repeatedly, including capturing the actual RSC response body).
+        // Rather than keep chasing which internal cache is responsible,
+        // this uses the one mechanism already PROVEN reliable throughout
+        // that whole investigation: put the tier in the URL itself, same
+        // as Home's own ?risk_tier= (see resolveRiskTier's cookie-first,
+        // query-param-fallback order) -- a URL that changes with the tier
+        // can't serve a same-URL cached/stale response for a different
+        // tier, regardless of which layer would otherwise be at fault.
+        prefetch={false}
         className="flex items-center justify-center gap-1.5 rounded-2xl border border-border bg-card-2 px-5 py-3.5 font-kr text-sm font-medium text-accent transition active:scale-[0.99]"
       >
         왜 이렇게 배분됐을까요?
